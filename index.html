@@ -40,9 +40,50 @@
     top: 0;
     height: 100vh;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 18px 0 30px 0;
-    transition: transform 0.25s ease;
+    transition: width 0.22s ease, transform 0.25s ease;
     z-index: 200;
+  }
+  .sidebar-collapse-btn {
+    position: sticky;
+    top: 8px;
+    float: right;
+    margin-right: 8px;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.4);
+    color: #fff;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    z-index: 210;
+  }
+  .sidebar-collapse-btn:hover { background: rgba(255,255,255,0.28); }
+
+  /* Collapsed state (wide screens only): shrink to a thin strip, hide labels */
+  .app-shell.sidebar-collapsed .sidebar {
+    width: 54px;
+  }
+  .app-shell.sidebar-collapsed .sidebar-header h1,
+  .app-shell.sidebar-collapsed .sidebar-header div,
+  .app-shell.sidebar-collapsed .sidebar-header .home-link,
+  .app-shell.sidebar-collapsed .sidebar-story-title span:not(.num),
+  .app-shell.sidebar-collapsed .sidebar-substories {
+    display: none;
+  }
+  .app-shell.sidebar-collapsed .sidebar-collapse-btn {
+    transform: rotate(180deg);
+  }
+  .app-shell.sidebar-collapsed .sidebar-story-title {
+    justify-content: center;
+    padding: 9px 4px;
+  }
+  .app-shell.sidebar-collapsed .sidebar-header {
+    padding: 0 4px 16px 4px;
+    text-align: center;
   }
 
   /* Mobile/tablet top bar with hamburger menu (hidden on wide screens) */
@@ -82,6 +123,7 @@
   /* ---- Collapsible sidebar on tablet/mobile widths ---- */
   @media (max-width: 900px) {
     .mobile-topbar { display: flex; }
+    .sidebar-collapse-btn { display: none; }
     .sidebar {
       position: fixed;
       left: 0;
@@ -336,11 +378,13 @@
   }
   .sentence.active-reading { background: #fdf0e4; }
   .zh-line {
-    font-size: 29px;
-    line-height: 2.3;
+    font-size: 31px;
+    line-height: 2.6;
+    letter-spacing: 0.06em;
+    word-spacing: 0.15em;
   }
-  ruby { margin: 0 1px; }
-  rt { font-size: 16px; color: #a8825a; font-weight: normal; }
+  ruby { margin: 0 5px; }
+  rt { font-size: 18px; color: #a8825a; font-weight: normal; letter-spacing: 0; }
   rt.hidden-pinyin { display: none; }
   .en-line {
     font-size: 19px;
@@ -348,6 +392,7 @@
     font-style: italic;
     margin-top: 4px;
   }
+  .en-line.hidden-translation { display: none; }
   .char-clickable { cursor: pointer; }
   .char-clickable:hover ruby { background: #fdeccb; border-radius: 3px; }
 
@@ -562,7 +607,7 @@
   .quiz-status.mistake { color: var(--accent); }
 
   @media (max-width: 480px) {
-    .zh-line { font-size: 25px; }
+    .zh-line { font-size: 27px; }
     .controls-bar { padding: 8px 10px; gap: 8px; }
     :root { --sidebar-w: 220px; }
   }
@@ -576,8 +621,9 @@
 </div>
 <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()"></div>
 
-<div class="app-shell">
+<div class="app-shell" id="appShell">
   <div class="sidebar" id="sidebar">
+    <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebarCollapse()" title="收起/展开菜单 Collapse/expand menu">◀</button>
     <div class="sidebar-header">
       <h1>📖 华文阅读乐园</h1>
       <div style="font-size:13px; opacity:0.85;">Chinese Reading Garden</div>
@@ -601,13 +647,19 @@
 
     <div id="story-view">
       <div class="controls-bar">
-        <button class="back-btn" onclick="showHome()">← 返回主页 Back to Home</button>
         <div class="toggle-wrap">
           <label class="switch">
             <input type="checkbox" id="pinyinToggle" checked onchange="togglePinyin()">
             <span class="slider"></span>
           </label>
           <span>拼音 Pinyin</span>
+        </div>
+        <div class="toggle-wrap">
+          <label class="switch">
+            <input type="checkbox" id="translationToggle" checked onchange="toggleTranslation()">
+            <span class="slider"></span>
+          </label>
+          <span>翻译 Translation</span>
         </div>
         <button class="read-btn" id="readBtn" onclick="toggleReadAloud()">🔊 朗读故事 Read Aloud</button>
         <select class="voice-select" id="voiceSelect"></select>
@@ -619,7 +671,6 @@
 
     <div id="writing-view">
       <div class="controls-bar">
-        <button class="back-btn" onclick="showHome()">← 返回主页 Back to Home</button>
         <div class="toggle-wrap">
           <label class="switch">
             <input type="checkbox" id="writingPinyinToggle" checked onchange="applyWritingPinyinState()">
@@ -786,6 +837,14 @@ function closeSidebar() {
   document.getElementById("sidebarBackdrop").classList.remove("open");
 }
 
+// Collapse/expand the sidebar to a thin icon strip on wide (non-drawer) screens.
+function toggleSidebarCollapse() {
+  const shell = document.getElementById("appShell");
+  const btn = document.getElementById("sidebarCollapseBtn");
+  const collapsed = shell.classList.toggle("sidebar-collapsed");
+  btn.textContent = collapsed ? "▶" : "◀";
+}
+
 function showHome() {
   document.getElementById("home").style.display = "block";
   document.getElementById("story-view").style.display = "none";
@@ -822,15 +881,16 @@ function renderStory(idx) {
     let zhHtml = "";
     sent.zh.forEach(pair => {
       if (/[一-鿿]/.test(pair.ch)) {
-        zhHtml += `<span class="char-clickable" onclick="speakChar('${pair.ch}')"><ruby>${pair.ch}<rt class="pinyin-rt">${pair.py}</rt></ruby></span>`;
+        zhHtml += `<span class="char-clickable" onclick="handleWordTap(${si}, '${pair.ch}')"><ruby>${pair.ch}<rt class="pinyin-rt">${pair.py}</rt></ruby></span>`;
       } else {
         zhHtml += pair.ch;
       }
     });
+    const showTranslation = document.getElementById("translationToggle") ? document.getElementById("translationToggle").checked : true;
     sentencesHtml += `
       <div class="sentence" id="sentence-${si}">
         <div class="zh-line">${zhHtml}</div>
-        <div class="en-line">${sent.en}</div>
+        <div class="en-line ${showTranslation ? '' : 'hidden-translation'}">${sent.en}</div>
       </div>`;
   });
 
@@ -979,11 +1039,35 @@ function startReading() {
     utter.lang = selectedVoice ? selectedVoice.lang : "zh-CN";
     if (selectedVoice) utter.voice = selectedVoice;
     utter.rate = 0.85;
-    utter.onend = () => { si++; speakNext(); };
-    utter.onerror = () => { si++; speakNext(); };
+    // Small pause after each sentence before moving to the next, so it doesn't
+    // run straight on and is easier for a young reader to follow.
+    utter.onend = () => { si++; setTimeout(speakNext, 550); };
+    utter.onerror = () => { si++; setTimeout(speakNext, 550); };
     speechSynthesis.speak(utter);
   }
   speakNext();
+}
+
+// Read a single sentence aloud, starting from its beginning (used when the
+// child taps any word in a sentence while pinyin is turned on).
+function readSentenceFrom(sentenceIdx) {
+  if (!('speechSynthesis' in window)) return;
+  if (currentStoryIndex === null) return;
+  const story = STORIES[currentStoryIndex];
+  const sent = story.sentences[sentenceIdx];
+  if (!sent) return;
+  speechSynthesis.cancel();
+  document.querySelectorAll(".sentence").forEach(el => el.classList.remove("active-reading"));
+  const sentEl = document.getElementById(`sentence-${sentenceIdx}`);
+  if (sentEl) sentEl.classList.add("active-reading");
+
+  const text = sent.zh.map(p => p.ch).join("");
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = selectedVoice ? selectedVoice.lang : "zh-CN";
+  if (selectedVoice) utter.voice = selectedVoice;
+  utter.rate = 0.85;
+  utter.onend = () => { if (sentEl) sentEl.classList.remove("active-reading"); };
+  speechSynthesis.speak(utter);
 }
 
 function stopReading() {
@@ -1005,6 +1089,26 @@ function speakChar(ch) {
   if (selectedVoice) utter.voice = selectedVoice;
   utter.rate = 0.8;
   speechSynthesis.speak(utter);
+}
+
+// When pinyin is visible, tapping any word reads the whole sentence from its
+// start (helps the child follow along with the pinyin). When pinyin is hidden,
+// tapping a word just speaks that single character, as before.
+function handleWordTap(sentenceIdx, ch) {
+  const pinyinOn = document.getElementById("pinyinToggle") && document.getElementById("pinyinToggle").checked;
+  if (pinyinOn) {
+    readSentenceFrom(sentenceIdx);
+  } else {
+    speakChar(ch);
+  }
+}
+
+// ---------- Translation toggle ----------
+function toggleTranslation() {
+  const show = document.getElementById("translationToggle").checked;
+  document.querySelectorAll(".en-line").forEach(el => {
+    el.classList.toggle("hidden-translation", !show);
+  });
 }
 
 function speakText(text) {
@@ -1114,7 +1218,6 @@ function selectWritingWord(storyIdx, wordIdx) {
     <div class="write-subtitle">${word.en}</div>
     <div class="write-controls">
       <button class="action-btn secondary" onclick="speakText('${word.zh}')">🔊 听发音 Listen</button>
-      <button class="action-btn secondary" id="quizBtn" onclick="startQuiz()">✍️ 我来写 Let Me Write</button>
       <button class="action-btn secondary" id="clearBtn" onclick="clearQuiz()">🔄 重来 Clear</button>
     </div>
     <div class="example-section">
@@ -1126,7 +1229,7 @@ function selectWritingWord(storyIdx, wordIdx) {
   html += `</div>
     </div>
     <div class="practice-section">
-      <div class="section-label">✍️ 我的练习 Your Practice (larger grid)</div>
+      <div class="section-label">✍️ 我的练习 Your Practice — start writing! (larger grid)</div>
       <div class="practice-grids" id="practiceGrids">`;
   chars.forEach((ch, ci) => {
     html += `<div class="char-cell" id="prCell-${ci}" style="width:${prCellSize}px;height:${prCellSize}px;"></div>`;
@@ -1157,18 +1260,22 @@ function selectWritingWord(storyIdx, wordIdx) {
       height: prCellSize,
       padding: 10,
       showOutline: true,
+      showCharacter: false,
       strokeAnimationSpeed: 1,
       delayBetweenStrokes: 200,
       strokeColor: '#8f3620',
       radicalColor: '#b5482a',
       highlightColor: '#f2c14e',
       drawingColor: '#2b6a2b',
-      drawingWidth: 5,
+      drawingWidth: 7,
       charDataLoader: charDataLoader
     });
   });
 
   loopExampleAnimation();
+  // Writing practice is always active now (no separate "Let Me Write" button) -
+  // the practice grid goes straight into quiz mode as soon as a word is picked.
+  startQuiz();
 }
 
 function loopExampleAnimation() {
