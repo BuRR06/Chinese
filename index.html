@@ -605,8 +605,9 @@
   }
   .en-line.hidden-translation { visibility: hidden; }
   .char-clickable { cursor: pointer; position: relative; }
-  .char-clickable:hover ruby { background: #fdeccb; border-radius: 3px; }
-  .char-clickable.char-reading ruby {
+  .hanzi-char { display: inline-block; }
+  .char-clickable:hover .hanzi-char { background: #fdeccb; border-radius: 3px; }
+  .char-clickable.char-reading .hanzi-char {
     background: #f5c065;
     border-radius: 4px;
     transition: background 0.1s ease-out;
@@ -1554,7 +1555,7 @@ function renderStory(idx) {
     let zhHtml = "";
     sent.zh.forEach((pair, ci) => {
       if (/[一-鿿]/.test(pair.ch)) {
-        zhHtml += `<span class="char-clickable" id="char-${si}-${ci}" onclick="handleWordTap(${si}, ${ci}, '${pair.ch}')"><ruby>${pair.ch}<rt class="pinyin-rt">${pair.py}</rt></ruby></span>`;
+        zhHtml += `<span class="char-clickable" id="char-${si}-${ci}" onclick="handleWordTap(${si}, ${ci}, '${pair.ch}')"><ruby><span class="hanzi-char">${pair.ch}</span><rt class="pinyin-rt">${pair.py}</rt></ruby></span>`;
       } else {
         // Punctuation has no pinyin above it, so it doesn't need a full
         // character-width cell like the "evenly spaced" hanzi do. Full-width
@@ -1803,6 +1804,13 @@ function clearCharHighlights() {
   document.querySelectorAll(".char-reading").forEach(el => el.classList.remove("char-reading"));
 }
 
+// Deliberate pause (ms) inserted after each of these punctuation marks when
+// they appear *inside* a sentence, so a young reader gets a clear beat at
+// clause boundaries instead of the text running straight on. Sentence-final
+// punctuation (。！？) isn't listed here — that boundary already gets its own
+// pause between sentences (see the 550ms gap in speakFrom).
+const CLAUSE_PAUSE_MS = { "，": 260, "、": 260, "；": 300, "：": 260 };
+
 function scheduleCharHighlights(si, zhPairs, rate) {
   const msPerChar = 340 / (rate || 1);
   let elapsed = 0;
@@ -1819,7 +1827,27 @@ function scheduleCharHighlights(si, zhPairs, rate) {
       charHighlightTimers.push(t);
     }
     elapsed += dur;
+    if (CLAUSE_PAUSE_MS[pair.ch]) elapsed += CLAUSE_PAUSE_MS[pair.ch];
   });
+}
+
+// Split one sentence's character pairs into clauses at internal punctuation
+// (，、；：), keeping the punctuation attached to the end of each clause.
+// Sentence-final punctuation (。！？ etc.) just rides along on the last
+// clause — it doesn't get its own split since that boundary already gets a
+// pause from the inter-sentence gap once the whole utterance finishes.
+function splitIntoClauses(zhPairs) {
+  const clauses = [];
+  let current = [];
+  zhPairs.forEach(pair => {
+    current.push(pair);
+    if (CLAUSE_PAUSE_MS[pair.ch]) {
+      clauses.push({ pairs: current, pauseAfter: CLAUSE_PAUSE_MS[pair.ch] });
+      current = [];
+    }
+  });
+  if (current.length) clauses.push({ pairs: current, pauseAfter: 0 });
+  return clauses;
 }
 
 // During continuous read-aloud, keep the sentence currently being read
@@ -1872,14 +1900,11 @@ function speakFrom(startIdx, continuous) {
     if (sentEl) sentEl.classList.add("active-reading");
     if (continuous && sentEl) scrollSentenceIntoViewIfNeeded(sentEl);
 
-    const text = levelData.sentences[si].zh.map(p => p.ch).join("");
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = selectedVoice ? selectedVoice.lang : "zh-CN";
-    if (selectedVoice) utter.voice = selectedVoice;
-    utter.rate = 0.65;
+    const rate = 0.75;
     clearCharHighlights();
-    scheduleCharHighlights(si, levelData.sentences[si].zh, utter.rate);
-    const advance = () => {
+    scheduleCharHighlights(si, levelData.sentences[si].zh, rate);
+
+    const advanceSentence = () => {
       if (myToken !== readingToken) return;
       clearCharHighlights();
       if (!continuous) {
@@ -1891,9 +1916,35 @@ function speakFrom(startIdx, continuous) {
       // doesn't run straight on and is easier for a young reader to follow.
       setTimeout(speakNext, 550);
     };
-    utter.onend = advance;
-    utter.onerror = advance;
-    speechSynthesis.speak(utter);
+
+    // Speak the sentence clause-by-clause (split at internal ，、；：) so
+    // there's a deliberate pause at each clause boundary, not just whatever
+    // pause the TTS engine happens to give a comma on its own.
+    const clauses = splitIntoClauses(levelData.sentences[si].zh);
+    let ci = 0;
+    const speakClause = () => {
+      if (myToken !== readingToken) return;
+      if (ci >= clauses.length) { advanceSentence(); return; }
+      const clause = clauses[ci];
+      const clauseText = clause.pairs.map(p => p.ch).join("");
+      const utter = new SpeechSynthesisUtterance(clauseText);
+      utter.lang = selectedVoice ? selectedVoice.lang : "zh-CN";
+      if (selectedVoice) utter.voice = selectedVoice;
+      utter.rate = rate;
+      const advanceClause = () => {
+        if (myToken !== readingToken) return;
+        ci++;
+        if (clause.pauseAfter) {
+          setTimeout(speakClause, clause.pauseAfter);
+        } else {
+          speakClause();
+        }
+      };
+      utter.onend = advanceClause;
+      utter.onerror = advanceClause;
+      speechSynthesis.speak(utter);
+    };
+    speakClause();
   }
   speakNext();
 }
@@ -1946,18 +1997,22 @@ function speakChar(ch) {
   speechSynthesis.speak(utter);
 }
 
-// When pinyin is visible, tapping any word reads the whole sentence from its
-// start (helps the child follow along with the pinyin). When pinyin is hidden,
-// tapping a word speaks that single character AND briefly reveals just that
-// character's pinyin, then hides it again — a quick peek without permanently
-// turning the toggle on.
+// If continuous read-aloud is already playing, tapping a word jumps reading
+// to that word's sentence and carries on through the rest of the story
+// afterwards (unchanged). Otherwise (read-aloud is off) tapping a word just
+// speaks that single character — if pinyin is hidden, it also briefly
+// reveals that character's pinyin, then hides it again, as a quick peek
+// without permanently turning the toggle on; if pinyin is already visible,
+// there's nothing to reveal.
 const wordTapPinyinTimers = {};
 function handleWordTap(sentenceIdx, charIdx, ch) {
-  const pinyinOn = document.getElementById("pinyinToggle") && document.getElementById("pinyinToggle").checked;
-  if (pinyinOn) {
+  if (isReading) {
     readSentenceFrom(sentenceIdx);
-  } else {
-    speakChar(ch);
+    return;
+  }
+  speakChar(ch);
+  const pinyinOn = document.getElementById("pinyinToggle") && document.getElementById("pinyinToggle").checked;
+  if (!pinyinOn) {
     const key = `${sentenceIdx}-${charIdx}`;
     const charEl = document.getElementById(`char-${sentenceIdx}-${charIdx}`);
     const rtEl = charEl ? charEl.querySelector(".pinyin-rt") : null;
