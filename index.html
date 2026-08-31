@@ -1822,6 +1822,21 @@ function scheduleCharHighlights(si, zhPairs, rate) {
   });
 }
 
+// During continuous read-aloud, keep the sentence currently being read
+// roughly centred in the viewport, but only when it isn't already
+// reasonably visible — avoids scrolling on every single sentence when the
+// reader hasn't moved off-screen yet.
+function scrollSentenceIntoViewIfNeeded(sentEl) {
+  const rect = sentEl.getBoundingClientRect();
+  const viewportH = window.innerHeight;
+  // "Reasonably visible" = fully within the middle 70% band of the screen.
+  const topBound = viewportH * 0.15;
+  const bottomBound = viewportH * 0.85;
+  if (rect.top >= topBound && rect.bottom <= bottomBound) return;
+  const targetY = window.scrollY + rect.top + rect.height / 2 - viewportH / 2;
+  window.scrollTo({ top: Math.max(0, targetY), behavior: "smooth" });
+}
+
 // Shared sentence-by-sentence speaking loop. When `continuous` is true (the
 // "朗读 Read Aloud" button's normal mode, or a word tapped while it's
 // already playing) it keeps going to the next sentence after each one
@@ -1855,6 +1870,7 @@ function speakFrom(startIdx, continuous) {
     document.querySelectorAll(".sentence").forEach(el => el.classList.remove("active-reading"));
     const sentEl = document.getElementById(`sentence-${si}`);
     if (sentEl) sentEl.classList.add("active-reading");
+    if (continuous && sentEl) scrollSentenceIntoViewIfNeeded(sentEl);
 
     const text = levelData.sentences[si].zh.map(p => p.ch).join("");
     const utter = new SpeechSynthesisUtterance(text);
