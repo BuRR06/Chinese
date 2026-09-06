@@ -474,6 +474,11 @@
   }
   .fab-page-btn:hover { background: var(--accent-dark); }
   .fab-page-btn:disabled { background: #bbb; cursor: not-allowed; }
+  /* Reset-to-first-page button: its own row directly under the prev/next
+     pair, above the pinyin toggle - same size/color family as the page
+     arrows so it reads as part of the same page-nav group, not a fourth
+     unrelated control. */
+  .fab-page-reset-btn { margin: 0 auto; }
 
   /* ---- Difficulty level pills ---- */
   .level-pills {
@@ -823,10 +828,13 @@
     gap: 18px;
     margin: 18px 0 6px 0;
   }
+  /* Colored to match the floating fab-stack's page arrows (var(--accent)
+     circles, white icon) so the in-passage and floating page controls read
+     as the same control family rather than two different button styles. */
   .page-arrow-btn {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    color: var(--ink);
+    background: var(--accent);
+    border: none;
+    color: #fff;
     width: 42px;
     height: 42px;
     border-radius: 50%;
@@ -836,9 +844,17 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
   }
-  .page-arrow-btn:hover { background: #efe4d0; }
-  .page-arrow-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .page-arrow-btn:hover { background: var(--accent-dark); }
+  .page-arrow-btn:disabled { background: #bbb; opacity: 0.6; cursor: not-allowed; box-shadow: none; }
+  /* Reset-to-first-page: inline after the next-page arrow, same family but
+     visually distinct (smaller, muted) since it's a less-used reset action
+     rather than the primary forward/back navigation. */
+  .page-reset-btn {
+    background: #9a9a9a;
+  }
+  .page-reset-btn:hover { background: #838383; }
   .page-indicator {
     font-size: 15px;
     color: #6a6a6a;
@@ -1094,6 +1110,7 @@
     <div class="sidebar-header">
       <h1 class="sidebar-title-link" onclick="showHome()" title="返回主页 Back to Home">华文阅读乐园</h1>
       <div class="sidebar-title-link" style="font-size:13px; opacity:0.85;" onclick="showHome()" title="返回主页 Back to Home">Chinese Reading Garden</div>
+      <div class="build-version" style="font-size:11px; opacity:0.6; margin-top:2px;">Build 2026-09-06 07:49</div>
       <a class="home-link" onclick="showHome()">🏠 主页 Home</a>
     </div>
     <div id="sidebarStories"></div>
@@ -1105,6 +1122,7 @@
       <div class="home-title">
         <h1>📖 华文阅读乐园 Chinese Reading Garden</h1>
         <p id="storyCountSubtitle">Primary 4 Chinese Reading Practice · 3 Levels Each</p>
+        <p class="build-version" style="font-size:12px; opacity:0.55; margin-top:4px;">Build 2026-09-06 07:49</p>
       </div>
       <div class="home-intro">
         选一个故事开始阅读吧！每个故事都有拼音、英文翻译和朗读功能。<br>
@@ -1129,6 +1147,9 @@
             <span class="fab-icon">→</span>
           </button>
         </div>
+        <button class="fab-toggle fab-page-btn fab-page-reset-btn" id="fabPageResetBtn" style="display:none;" onclick="resetToFirstPage(currentStoryIndex)" title="回到第一页 Back to first page">
+          <span class="fab-icon">↻</span>
+        </button>
         <label class="fab-toggle" id="pinyinFab" title="拼音 Pinyin">
           <input type="checkbox" id="pinyinToggle" checked onchange="togglePinyin()">
           <span class="fab-icon">拼</span>
@@ -1792,6 +1813,7 @@ function renderStory(idx) {
       <button class="page-arrow-btn" id="pagePrevBtn" onclick="prevStoryPage(${idx})" ${currentPage === 0 ? "disabled" : ""} title="上一页 Previous page">←</button>
       <div class="page-indicator" id="pageIndicator">${onQuizPage ? "读后小问题 Questions" : `第 ${currentPage + 1} / ${pageRanges.length} 页 · Page ${currentPage + 1} of ${pageRanges.length}`}</div>
       <button class="page-arrow-btn" id="pageNextBtn" onclick="nextStoryPage(${idx})" ${currentPage === totalPages - 1 ? "disabled" : ""} title="下一页 Next page">→</button>
+      <button class="page-arrow-btn page-reset-btn" id="pageResetBtn" onclick="resetToFirstPage(${idx})" ${currentPage === 0 ? "disabled" : ""} title="回到第一页 Back to first page">↻</button>
     </div>` : "";
 
   // In paged mode, the image + passage text only show while on a text page;
@@ -1837,6 +1859,11 @@ function renderStory(idx) {
     const fabNext = document.getElementById("fabPageNextBtn");
     if (fabPrev) fabPrev.disabled = currentPage === 0;
     if (fabNext) fabNext.disabled = currentPage === totalPages - 1;
+  }
+  const fabPageReset = document.getElementById("fabPageResetBtn");
+  if (fabPageReset) {
+    fabPageReset.style.display = isPaged ? "flex" : "none";
+    fabPageReset.disabled = currentPage === 0;
   }
 }
 
@@ -1898,6 +1925,22 @@ function nextStoryPage(idx) {
   if (storyPageState[key] < maxPage) {
     const wasReading = isReading;
     storyPageState[key]++;
+    stopReading();
+    renderStory(idx);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    resumeReadingIfWasPlaying(idx, wasReading);
+  }
+}
+
+// Jumps straight back to page 1 of a paged story from wherever the reader
+// currently is - same before/after pattern as prevStoryPage/nextStoryPage
+// (stop reading, update page state, re-render, keep reading if it was on).
+function resetToFirstPage(idx) {
+  const level = currentLevelFor(idx);
+  const key = pageKey(idx, level);
+  if (storyPageState[key] > 0) {
+    const wasReading = isReading;
+    storyPageState[key] = 0;
     stopReading();
     renderStory(idx);
     window.scrollTo({ top: 0, behavior: "smooth" });
