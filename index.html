@@ -627,7 +627,13 @@
     padding-left: 0.32em;
     padding-right: 0.08em;
   }
-  rt { font-size: 18px; color: #a8825a; font-weight: normal; letter-spacing: 0; }
+  /* position+z-index guarantee the pinyin annotation always paints above
+     the character's read-aloud/tap highlight background, even on tighter
+     viewports (tablets in particular) where the ruby annotation's line-box
+     sits close enough to the character below it that the highlighted
+     .hanzi-char's background could otherwise visually creep up and cover
+     part of the pinyin text. */
+  rt { font-size: 18px; color: #a8825a; font-weight: normal; letter-spacing: 0; position: relative; z-index: 1; }
   rt.hidden-pinyin { visibility: hidden; }
   .en-line {
     font-size: 19px;
@@ -989,8 +995,10 @@
     text-align: center;
   }
   .write-panel .empty-state { padding: 60px 20px; color: #a8a29a; font-size: 17px; }
-  .write-title { font-size: 22px; margin-bottom: 2px; }
-  .write-subtitle { font-size: 15px; color: #8a8a8a; margin-bottom: 16px; }
+  .write-title { font-size: 28px; margin-bottom: 2px; }
+  .write-subtitle { font-size: 19px; color: #8a8a8a; margin-bottom: 16px; }
+  .write-title-repeat { font-size: 28px; margin-top: 18px; margin-bottom: 2px; text-align: center; }
+  .write-subtitle-repeat { font-size: 19px; color: #8a8a8a; margin-bottom: 4px; text-align: center; }
 
   .example-section, .practice-section {
     margin-bottom: 20px;
@@ -2042,6 +2050,46 @@ function toggleReadAloud() {
   if (isReading) { stopReading(); } else { startReading(); }
 }
 
+// The same `rate` value passed to SpeechSynthesisUtterance does NOT speak at
+// the same real-world speed on every device: it's a multiplier on top of
+// whatever that platform's own Chinese voice considers "1.0" (normal), and
+// each vendor tunes that baseline differently. In practice, Apple's
+// built-in compact Chinese voices (the ones iOS/iPadOS Safari uses when no
+// better voice is installed - "Tingting" on Mandarin, "Sinji" on Cantonese,
+// and their "-compact" variants) speak noticeably faster at the same rate
+// than typical desktop Chrome/Edge Chinese voices. That's what shows up as
+// "reads fine on a laptop, sounds rushed with no obvious punctuation pause
+// on an iPad" - the compact voice is running through the text quickly
+// enough that our explicit clause-pause setTimeout gaps (see
+// CLAUSE_PAUSE_MS) end up feeling relatively small next to it.
+//
+// There's no reliable way to query a voice's actual words-per-minute from
+// the Web Speech API, so this is a heuristic based on the voice name
+// patterns Apple's compact voices are known to use, not a real
+// measurement - it can't perfectly equalize every device/voice
+// combination, but it corrects the specific, common case that prompted
+// this.
+function isLikelyFastCompactVoice(voice) {
+  if (!voice || !voice.name) return false;
+  const name = voice.name.toLowerCase();
+  return name.includes('compact') || name.includes('tingting') || name.includes('sinji') || name.includes('meijia');
+}
+
+// Effective reading rate for the currently selected voice: the base rate,
+// nudged down a bit on voices we suspect run fast at that base rate so the
+// perceived pace (and the relative size of the punctuation pauses below)
+// stays closer to what other devices sound like.
+function effectiveReadingRate(baseRate) {
+  return isLikelyFastCompactVoice(selectedVoice) ? baseRate * 0.85 : baseRate;
+}
+
+// Clause-boundary pause durations scale inversely with the effective rate,
+// same idea as the per-character highlight timing below (340 / rate) -
+// a voice running faster (lower effective rate multiplier's real-world
+// speed being higher, or vice versa) still gets a punctuation pause that
+// feels proportionate to its own pace, rather than a fixed millisecond gap
+// that shrinks in relative significance as the voice speaks faster.
+
 // Web Speech API's onboundary event is unreliable across browsers, so we
 // estimate per-character timing from character count + speech rate instead,
 // and step a highlight (soft background + small moving dot) through the
@@ -2168,7 +2216,7 @@ function speakFrom(startIdx, continuous) {
     if (sentEl) sentEl.classList.add("active-reading");
     if (continuous && sentEl) scrollSentenceIntoViewIfNeeded(sentEl);
 
-    const rate = 0.8;
+    const rate = effectiveReadingRate(0.8);
     clearCharHighlights();
 
     const advanceSentence = () => {
@@ -2223,7 +2271,17 @@ function speakFrom(startIdx, continuous) {
         ci++;
         charOffset += clause.pairs.length;
         if (clause.pauseAfter) {
-          setTimeout(speakClause, clause.pauseAfter);
+          // CLAUSE_PAUSE_MS's values were tuned for the base rate (0.8).
+          // Pause length should scale the same way per-character highlight
+          // timing does (340 / rate) - inversely with rate - so a voice
+          // that's been nudged slower (isLikelyFastCompactVoice, see
+          // effectiveReadingRate) gets a proportionately LONGER pause here,
+          // not shorter: it's already speaking each character more slowly,
+          // so the punctuation beat needs to stretch along with it to still
+          // read as a deliberate pause rather than shrinking into
+          // insignificance next to the rest of the (now slower) sentence.
+          const scaledPause = Math.round(clause.pauseAfter * (0.8 / rate));
+          setTimeout(speakClause, scaledPause);
         } else {
           speakClause();
         }
@@ -2287,7 +2345,7 @@ function speakChar(ch) {
   const utter = new SpeechSynthesisUtterance(ch);
   utter.lang = selectedVoice ? selectedVoice.lang : "zh-CN";
   if (selectedVoice) utter.voice = selectedVoice;
-  utter.rate = 0.7;
+  utter.rate = effectiveReadingRate(0.7);
   speechSynthesis.speak(utter);
 }
 
@@ -2337,7 +2395,7 @@ function speakText(text) {
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = selectedVoice ? selectedVoice.lang : "zh-CN";
   if (selectedVoice) utter.voice = selectedVoice;
-  utter.rate = 0.7;
+  utter.rate = effectiveReadingRate(0.7);
   speechSynthesis.speak(utter);
 }
 
@@ -2676,6 +2734,8 @@ function selectWritingWord(storyIdx, wordIdx) {
     html += `<div class="char-cell" id="prCell-${ci}" style="width:${prCellSize}px;height:${prCellSize}px;"></div>`;
   });
   html += `</div>
+      <div class="write-title-repeat">${word.zh}  (${word.py})</div>
+      <div class="write-subtitle-repeat">${word.en}</div>
       <div class="quiz-status" id="quizStatus"></div>
     </div>
   `;
