@@ -1349,6 +1349,13 @@ let charHighlightTimers = [];
 // speak() call — which is what caused read-aloud to seem to "read the wrong
 // text" and keep changing when tapping around while it was playing.
 let readingToken = 0;
+// Remembers where continuous read-aloud last was (story + sentence index)
+// so toggling the 朗读 button off then on again resumes from that sentence
+// instead of restarting from the top of the page. Cleared whenever the
+// story/page/level changes, or when a sentence is tapped directly, so a
+// stale position from a different story or page never gets resumed into.
+let lastReadingStoryIndex = null;
+let lastReadingSentenceIdx = null;
 
 // ============ Local progress persistence ============
 // Saved per-browser (not synced across devices): pinyin/translation
@@ -2047,7 +2054,10 @@ if ('speechSynthesis' in window) {
 }
 
 function toggleReadAloud() {
-  if (isReading) { stopReading(); } else { startReading(); }
+  // Pausing via the 朗读/Stop button keeps the resume point (clearResumePoint
+  // = false) so pressing it again picks up from the same sentence instead
+  // of restarting the page - see startReading/lastReadingSentenceIdx.
+  if (isReading) { stopReading(false); } else { startReading(); }
 }
 
 // The same `rate` value passed to SpeechSynthesisUtterance does NOT speak at
@@ -2137,6 +2147,13 @@ function scheduleClauseHighlights(si, clausePairs, charIndexOffset, rate) {
     }
     elapsed += dur;
   });
+  // Report back how long the LAST character's own highlight needs to stay
+  // visible (i.e. when it's safe to clear it) so callers whose utter.onend
+  // fires right as the clause's audio finishes - which lands close to when
+  // the last char's highlight was just applied, not after it's had its
+  // full on-screen duration - can hold off clearing until then instead of
+  // wiping the highlight off the final word almost the instant it appears.
+  return elapsed;
 }
 
 // Split one sentence's character pairs into clauses at internal punctuation
@@ -2216,6 +2233,15 @@ function speakFrom(startIdx, continuous) {
     if (sentEl) sentEl.classList.add("active-reading");
     if (continuous && sentEl) scrollSentenceIntoViewIfNeeded(sentEl);
 
+    // Track where continuous read-aloud currently is so toggling off then
+    // back on can resume here (see startReading). Only recorded for
+    // continuous playback - a one-off tapped sentence (continuous === false)
+    // shouldn't overwrite the resume point of a paused continuous session.
+    if (continuous) {
+      lastReadingStoryIndex = currentStoryIndex;
+      lastReadingSentenceIdx = si;
+    }
+
     const rate = effectiveReadingRate(0.8);
     clearCharHighlights();
 
@@ -2258,11 +2284,21 @@ function speakFrom(startIdx, continuous) {
       // though, so fall back to scheduling right away if onstart hasn't
       // shown up shortly after speak() was called - a same-tick fallback
       // guard (startedHighlighting) makes sure we never schedule twice.
+      // scheduleClauseHighlights also returns how long (ms) the LAST
+      // character's own highlight needs to stay on screen after it's
+      // applied - advanceClause below waits at least that long before
+      // moving on, otherwise utter.onend (which fires right as the TTS
+      // audio ends, i.e. right around when that final highlight was just
+      // applied) would immediately advance/clear it, so the highlight
+      // never visibly reaches - or holds on - the clause's last word.
       let startedHighlighting = false;
+      let lastCharDelay = 0;
+      let highlightStartTime = 0;
       const beginHighlighting = () => {
         if (startedHighlighting || myToken !== readingToken) return;
         startedHighlighting = true;
-        scheduleClauseHighlights(si, clause.pairs, clauseCharOffset, rate);
+        highlightStartTime = Date.now();
+        lastCharDelay = scheduleClauseHighlights(si, clause.pairs, clauseCharOffset, rate);
       };
       utter.onstart = beginHighlighting;
       setTimeout(beginHighlighting, 80);
@@ -2270,20 +2306,32 @@ function speakFrom(startIdx, continuous) {
         if (myToken !== readingToken) return;
         ci++;
         charOffset += clause.pairs.length;
-        if (clause.pauseAfter) {
-          // CLAUSE_PAUSE_MS's values were tuned for the base rate (0.8).
-          // Pause length should scale the same way per-character highlight
-          // timing does (340 / rate) - inversely with rate - so a voice
-          // that's been nudged slower (isLikelyFastCompactVoice, see
-          // effectiveReadingRate) gets a proportionately LONGER pause here,
-          // not shorter: it's already speaking each character more slowly,
-          // so the punctuation beat needs to stretch along with it to still
-          // read as a deliberate pause rather than shrinking into
-          // insignificance next to the rest of the (now slower) sentence.
-          const scaledPause = Math.round(clause.pauseAfter * (0.8 / rate));
-          setTimeout(speakClause, scaledPause);
+        // Make sure the last character's highlight has had its full
+        // on-screen duration before we let anything clear/replace it.
+        const elapsedSinceHighlightStart = highlightStartTime ? (Date.now() - highlightStartTime) : 0;
+        const remainingHoldTime = Math.max(0, lastCharDelay - elapsedSinceHighlightStart);
+        const proceed = () => {
+          if (myToken !== readingToken) return;
+          if (clause.pauseAfter) {
+            // CLAUSE_PAUSE_MS's values were tuned for the base rate (0.8).
+            // Pause length should scale the same way per-character highlight
+            // timing does (340 / rate) - inversely with rate - so a voice
+            // that's been nudged slower (isLikelyFastCompactVoice, see
+            // effectiveReadingRate) gets a proportionately LONGER pause here,
+            // not shorter: it's already speaking each character more slowly,
+            // so the punctuation beat needs to stretch along with it to still
+            // read as a deliberate pause rather than shrinking into
+            // insignificance next to the rest of the (now slower) sentence.
+            const scaledPause = Math.round(clause.pauseAfter * (0.8 / rate));
+            setTimeout(speakClause, scaledPause);
+          } else {
+            speakClause();
+          }
+        };
+        if (remainingHoldTime > 0) {
+          setTimeout(proceed, remainingHoldTime);
         } else {
-          speakClause();
+          proceed();
         }
       };
       utter.onend = advanceClause;
@@ -2297,7 +2345,10 @@ function speakFrom(startIdx, continuous) {
 
 function startReading() {
   if (!('speechSynthesis' in window)) return;
-  stopReading();
+  // Preserve whatever resume point toggling off just saved (see
+  // toggleReadAloud/stopReading) - this call is only clearing leftover
+  // speechSynthesis/UI state before immediately reading it back below.
+  stopReading(false);
   isReading = true;
   const btn = document.getElementById("readBtn");
   setReadBtnState("⏹", "停止", "停止 Stop");
@@ -2308,7 +2359,22 @@ function startReading() {
   // quiz "page" (no readable range), there's nothing to read.
   const readableRange = currentReadableRange(currentStoryIndex);
   if (readableRange === null) { stopReading(); return; }
-  speakFrom(readableRange[0], true);
+  // Resume from wherever continuous read-aloud last was (toggled off mid-
+  // sentence, then back on) rather than always restarting from the top of
+  // the page - but only when that saved position is still valid for what's
+  // on screen right now: same story, and still within the current page's
+  // readable range. Otherwise (different story, navigated to a different
+  // page, or no saved position yet) fall back to the page's first sentence.
+  let startIdx = readableRange[0];
+  if (
+    lastReadingStoryIndex === currentStoryIndex &&
+    lastReadingSentenceIdx !== null &&
+    lastReadingSentenceIdx >= readableRange[0] &&
+    lastReadingSentenceIdx < readableRange[1]
+  ) {
+    startIdx = lastReadingSentenceIdx;
+  }
+  speakFrom(startIdx, true);
 }
 
 // Read a sentence aloud, starting from its beginning (used when the child
@@ -2326,7 +2392,13 @@ function readSentenceFrom(sentenceIdx) {
   }
 }
 
-function stopReading() {
+// `clearResumePoint` defaults to true (e.g. navigating to a new story/page/
+// level via renderStory, or explicitly closing the passage) so a stale
+// sentence position never gets resumed into on a different page. The
+// 朗读/Stop button's own toggle-off path passes false so it can remember
+// where playback was and pick back up from there next time it's pressed
+// (see startReading).
+function stopReading(clearResumePoint = true) {
   isReading = false;
   readingToken++;
   if ('speechSynthesis' in window) speechSynthesis.cancel();
@@ -2337,6 +2409,10 @@ function stopReading() {
   }
   document.querySelectorAll(".sentence").forEach(el => el.classList.remove("active-reading"));
   clearCharHighlights();
+  if (clearResumePoint) {
+    lastReadingStoryIndex = null;
+    lastReadingSentenceIdx = null;
+  }
 }
 
 function speakChar(ch) {
