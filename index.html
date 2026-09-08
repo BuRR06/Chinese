@@ -1175,7 +1175,7 @@
     <div class="sidebar-header">
       <h1 class="sidebar-title-link" onclick="showHome()" title="返回主页 Back to Home">华文阅读乐园</h1>
       <div class="sidebar-title-link" style="font-size:13px; opacity:0.85;" onclick="showHome()" title="返回主页 Back to Home">Chinese Reading Garden</div>
-      <div class="build-version" style="font-size:11px; opacity:0.6; margin-top:2px;">Build 2026-09-08 15:55 SGT</div>
+      <div class="build-version" style="font-size:11px; opacity:0.6; margin-top:2px;">Build 2026-09-08 16:04 SGT</div>
       <a class="home-link" onclick="showHome()">🏠 主页 Home</a>
     </div>
     <div id="sidebarStories"></div>
@@ -1187,7 +1187,7 @@
       <div class="home-title">
         <h1>📖 华文阅读乐园 Chinese Reading Garden</h1>
         <p id="storyCountSubtitle">Primary 4 Chinese Reading Practice · 3 Levels Each</p>
-        <p class="build-version" style="font-size:12px; opacity:0.55; margin-top:4px;">Build 2026-09-08 15:55 SGT</p>
+        <p class="build-version" style="font-size:12px; opacity:0.55; margin-top:4px;">Build 2026-09-08 16:04 SGT</p>
       </div>
       <div class="home-intro">
         选一个故事开始阅读吧！每个故事都有拼音、英文翻译和朗读功能。<br>
@@ -2297,6 +2297,31 @@ const CLAUSE_PAUSE_MS = { "，": 260, "、": 260, "；": 300, "：": 260 };
 // across clauses - it can still be slightly off within a single clause
 // (the per-character estimate there is still a guess), but errors no
 // longer compound sentence-over-sentence.
+// Some TTS voices (observed: Chrome on iPadOS) mis-disambiguate certain
+// polyphone words in context and read them with the wrong tone - e.g. 好
+// in 好吃 (hǎo chī, "tasty") coming out as the unrelated hào reading
+// instead. This doesn't affect every voice (desktop Chrome/Edge and Safari
+// on iPhone/iPad get it right), and it only affects the continuous
+// read-aloud path - tapping a single character always speaks correctly
+// since there's no surrounding context to misread. Since the wrong voice
+// can't be fixed from here, we work around it by substituting a
+// speech-only version of the text (never shown on screen, never used for
+// highlight timing - see scheduleClauseHighlights, which times off the
+// original clausePairs/character count and is unaffected by this) that
+// nudges affected engines toward the correct reading, typically by
+// inserting a zero-width joiner between the two characters so the engine
+// no longer merges them into the wrong compound reading.
+const SPEECH_DISAMBIGUATION = [
+  { pattern: /好吃/g, replacement: "好‍吃" },
+];
+function disambiguateForSpeech(text) {
+  let out = text;
+  SPEECH_DISAMBIGUATION.forEach(({ pattern, replacement }) => {
+    out = out.replace(pattern, replacement);
+  });
+  return out;
+}
+
 function scheduleClauseHighlights(si, clausePairs, charIndexOffset, rate) {
   const msPerChar = 340 / (rate || 1);
   let elapsed = 0;
@@ -2442,7 +2467,7 @@ function speakFrom(startIdx, continuous) {
       const clause = clauses[ci];
       const clauseCharOffset = charOffset;
       const clauseText = clause.pairs.map(p => p.ch).join("");
-      const utter = new SpeechSynthesisUtterance(clauseText);
+      const utter = new SpeechSynthesisUtterance(disambiguateForSpeech(clauseText));
       utter.lang = selectedVoice ? selectedVoice.lang : "zh-CN";
       if (selectedVoice) utter.voice = selectedVoice;
       utter.rate = rate;
@@ -2652,7 +2677,7 @@ function toggleTranslation() {
 function speakText(text) {
   if (!('speechSynthesis' in window)) return;
   speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
+  const utter = new SpeechSynthesisUtterance(disambiguateForSpeech(text));
   utter.lang = selectedVoice ? selectedVoice.lang : "zh-CN";
   if (selectedVoice) utter.voice = selectedVoice;
   utter.rate = effectiveReadingRate(0.7);
