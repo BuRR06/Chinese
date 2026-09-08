@@ -637,8 +637,29 @@
      viewports (tablets in particular) where the ruby annotation's line-box
      sits close enough to the character below it that the highlighted
      .hanzi-char's background could otherwise visually creep up and cover
-     part of the pinyin text. */
-  rt { font-size: 18px; color: #a8825a; font-weight: normal; letter-spacing: 0; position: relative; z-index: 1; }
+     part of the pinyin text.
+
+     iPadOS Chrome (and Safari) run on WebKit, which lays out <rt> ruby
+     annotations differently from Chromium/Blink (desktop Chrome, Android
+     Chrome): WebKit doesn't reserve as much vertical space above the base
+     text for the annotation, so the ruby row sits noticeably closer to the
+     character below it there than the line-height alone would suggest -
+     z-index/position:relative isn't enough on its own to guarantee the
+     highlight can't visually creep into that tighter gap. isolation
+     forces a genuinely new stacking context (stronger guarantee than
+     z-index alone against a WebKit-specific bug), and the explicit
+     min-height/padding-bottom widen the gap so there's real room between
+     the pinyin and the character even under WebKit's tighter layout. */
+  rt {
+    font-size: 18px;
+    color: #a8825a;
+    font-weight: normal;
+    letter-spacing: 0;
+    position: relative;
+    z-index: 1;
+    isolation: isolate;
+    padding-bottom: 3px;
+  }
   rt.hidden-pinyin { visibility: hidden; }
   .en-line {
     font-size: 19px;
@@ -648,7 +669,11 @@
   }
   .en-line.hidden-translation { visibility: hidden; }
   .char-clickable { cursor: pointer; position: relative; -webkit-tap-highlight-color: transparent; }
-  .hanzi-char { display: inline-block; }
+  /* isolation + its own stacking context stops the highlight background
+     (added below) from ever being able to paint outside this element's own
+     box on any engine, including WebKit's tighter ruby-annotation layout
+     on iPadOS - see the long comment on rt above for why that matters. */
+  .hanzi-char { display: inline-block; position: relative; isolation: isolate; }
   .char-clickable:hover .hanzi-char { background: #fdeccb; border-radius: 3px; }
   .char-clickable.char-reading .hanzi-char {
     background: #f5c065;
@@ -1175,7 +1200,7 @@
     <div class="sidebar-header">
       <h1 class="sidebar-title-link" onclick="showHome()" title="返回主页 Back to Home">华文阅读乐园</h1>
       <div class="sidebar-title-link" style="font-size:13px; opacity:0.85;" onclick="showHome()" title="返回主页 Back to Home">Chinese Reading Garden</div>
-      <div class="build-version" style="font-size:11px; opacity:0.6; margin-top:2px;">Build 2026-09-08 16:04 SGT</div>
+      <div class="build-version" style="font-size:11px; opacity:0.6; margin-top:2px;">Build 2026-09-08 16:21 SGT</div>
       <a class="home-link" onclick="showHome()">🏠 主页 Home</a>
     </div>
     <div id="sidebarStories"></div>
@@ -1187,7 +1212,7 @@
       <div class="home-title">
         <h1>📖 华文阅读乐园 Chinese Reading Garden</h1>
         <p id="storyCountSubtitle">Primary 4 Chinese Reading Practice · 3 Levels Each</p>
-        <p class="build-version" style="font-size:12px; opacity:0.55; margin-top:4px;">Build 2026-09-08 16:04 SGT</p>
+        <p class="build-version" style="font-size:12px; opacity:0.55; margin-top:4px;">Build 2026-09-08 16:21 SGT</p>
       </div>
       <div class="home-intro">
         选一个故事开始阅读吧！每个故事都有拼音、英文翻译和朗读功能。<br>
